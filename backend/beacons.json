@@ -4,13 +4,13 @@
             "$oid": "69b12345d80ebd1c9758f1b1"
         },
         "name": "Beacon-1-Entrance",
-        "uuid": "00010203-0405-0607-0809-0a0b0c0d0e0f",
+        "uuid": "00010203-0405-0607-0809-0A0B0C0D0E0F",
         "major": 4386,
         "minor": 13124,
         "buildingId": "698b7b18399ebc682c0e97ac",
         "floorId": "698cd20d9015af450921723d",
-        "x": 270,
-        "y": 71,
+        "x": 191,
+        "y": 83,
         "txPower": -58,
         "description": "Primary entrance beacon",
         "_class": "com.wayfinding.indoor.model.Beacon"
@@ -20,15 +20,31 @@
             "$oid": "69b12345d80ebd1c9758f1b2"
         },
         "name": "Beacon-2-Office",
-        "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        "major": 1,
-        "minor": 1,
+        "uuid": "0800E0A6-A8E7-DF85-1A02-130C1E1B0E0F",
+        "major": 34560,
+        "minor": 0,
         "buildingId": "698b7b18399ebc682c0e97ac",
         "floorId": "698cd20d9015af450921723d",
-        "x": 776,
-        "y": 744,
+        "x": 194,
+        "y": 432,
         "txPower": -58,
         "description": "Secondary beacon near office area",
+        "_class": "com.wayfinding.indoor.model.Beacon"
+    },
+    {
+        "_id": {
+            "$oid": "69b12345d80ebd1c9758f1b3"
+        },
+        "name": "Beacon-3-Corner",
+        "uuid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+        "major": 36608,
+        "minor": 0,
+        "buildingId": "698b7b18399ebc682c0e97ac",
+        "floorId": "698cd20d9015af450921723d",
+        "x": 681,
+        "y": 820,
+        "txPower": -58,
+        "description": "Third beacon near corner",
         "_class": "com.wayfinding.indoor.model.Beacon"
     }
 ]

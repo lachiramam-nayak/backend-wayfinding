@@ -12,8 +12,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -25,9 +27,9 @@ public class PositioningService {
     private final BuildingRepository buildingRepository;
 
     /**
-     * Compute user position from scanned beacons.
-     * Uses nearest-beacon or weighted RSSI positioning.
-     * NO trilateration, NO Kalman filters (per requirements).
+     * Compute user position from scanned beacons using iBeacon UUID+Major+Minor matching.
+     * Picks the strongest valid beacon (highest RSSI) and returns its coordinates.
+     * This method ignores MAC addresses and matches only on UUID/Major/Minor.
      */
     public PositionResponse computePosition(BeaconScanRequest request) {
         if (request.getBeacons() == null || request.getBeacons().isEmpty()) {
@@ -37,16 +39,32 @@ public class PositioningService {
                     .build();
         }
 
-        // Match scanned beacons to registered beacons in database
+        // Match scanned beacons to registered beacons in database (UUID+Major+Minor only)
         List<MatchedBeacon> matchedBeacons = new ArrayList<>();
         
         for (BeaconScanRequest.ScannedBeacon scanned : request.getBeacons()) {
-            Optional<Beacon> registered = beaconRepository.findByUuidAndMajorAndMinor(
-                    scanned.getUuid().toUpperCase(),
-                    scanned.getMajor(),
-                    scanned.getMinor()
-            );
-            
+            // Filter out weak signals (backend side safety): ignore RSSI below -75 dBm
+            if (scanned.getRssi() < -75) {
+                continue;
+            }
+
+            // Match by UUID+Major+Minor (preferred). Do NOT use MAC addresses.
+            Optional<Beacon> registered = Optional.empty();
+            if (scanned.getUuid() != null && !scanned.getUuid().trim().isEmpty()) {
+                String uuid = scanned.getUuid().trim();
+                Integer major = scanned.getMajor();
+                Integer minor = scanned.getMinor();
+
+                if (major != null && minor != null) {
+                    String upper = uuid.toUpperCase();
+                    String lower = uuid.toLowerCase();
+                    registered = beaconRepository.findByUuidAndMajorAndMinor(upper, major, minor);
+                    if (registered.isEmpty() && !lower.equals(upper)) {
+                        registered = beaconRepository.findByUuidAndMajorAndMinor(lower, major, minor);
+                    }
+                }
+            }
+
             if (registered.isPresent()) {
                 matchedBeacons.add(new MatchedBeacon(registered.get(), scanned.getRssi()));
             }
@@ -59,32 +77,22 @@ public class PositioningService {
                     .build();
         }
 
-        // Group beacons by floor to determine which floor user is on
-        Map<String, List<MatchedBeacon>> beaconsByFloor = matchedBeacons.stream()
-                .collect(Collectors.groupingBy(mb -> mb.beacon.getFloorId()));
-
-        // Find the floor with the strongest combined signal
-        String bestFloorId = null;
-        double bestFloorScore = Double.NEGATIVE_INFINITY;
-
-        for (Map.Entry<String, List<MatchedBeacon>> entry : beaconsByFloor.entrySet()) {
-            // Score = sum of RSSI values (less negative = stronger = better)
-            double score = entry.getValue().stream()
-                    .mapToDouble(mb -> mb.rssi)
-                    .sum();
-            if (score > bestFloorScore) {
-                bestFloorScore = score;
-                bestFloorId = entry.getKey();
-            }
+        // Pick strongest RSSI (closest to 0)
+        MatchedBeacon best = matchedBeacons.stream()
+                .max(Comparator.comparingInt(mb -> mb.rssi))
+                .orElse(null);
+        if (best == null) {
+            return PositionResponse.builder()
+                    .valid(false)
+                    .errorMessage("No registered beacons found")
+                    .build();
         }
 
-        List<MatchedBeacon> floorBeacons = beaconsByFloor.get(bestFloorId);
-        
-        // Compute position using weighted average based on RSSI
-        double[] position = computeWeightedPosition(floorBeacons);
+        double[] position = new double[]{best.beacon.getX(), best.beacon.getY()};
+        String method = "ibeacon";
 
         // Get floor and building info
-        Optional<Floor> floorOpt = floorRepository.findById(bestFloorId);
+        Optional<Floor> floorOpt = floorRepository.findById(best.beacon.getFloorId());
         if (floorOpt.isEmpty()) {
             return PositionResponse.builder()
                     .valid(false)
@@ -104,47 +112,9 @@ public class PositioningService {
                 .floorNumber(floor.getFloorNumber())
                 .x(position[0])
                 .y(position[1])
-                .method(floorBeacons.size() == 1 ? "nearest" : "weighted")
-                .beaconsUsed(floorBeacons.size())
+                .method(method)
+                .beaconsUsed(1)
                 .build();
-    }
-
-    /**
-     * Compute weighted position using RSSI-based weights.
-     * Stronger signal (less negative RSSI) = higher weight.
-     */
-    private double[] computeWeightedPosition(List<MatchedBeacon> beacons) {
-        if (beacons.size() == 1) {
-            // Single beacon: just return its position
-            Beacon b = beacons.get(0).beacon;
-            return new double[]{b.getX(), b.getY()};
-        }
-
-        // Convert RSSI to weights
-        // Weight = 10^(RSSI / 20) - this gives more weight to stronger signals
-        double totalWeight = 0;
-        double weightedX = 0;
-        double weightedY = 0;
-
-        for (MatchedBeacon mb : beacons) {
-            // RSSI is typically -30 to -100 dBm
-            // Convert to positive weight where stronger (less negative) = higher
-            double weight = Math.pow(10, (100 + mb.rssi) / 40.0);
-            
-            weightedX += mb.beacon.getX() * weight;
-            weightedY += mb.beacon.getY() * weight;
-            totalWeight += weight;
-        }
-
-        if (totalWeight == 0) {
-            // Fallback to simple average
-            return new double[]{
-                    beacons.stream().mapToDouble(mb -> mb.beacon.getX()).average().orElse(0),
-                    beacons.stream().mapToDouble(mb -> mb.beacon.getY()).average().orElse(0)
-            };
-        }
-
-        return new double[]{weightedX / totalWeight, weightedY / totalWeight};
     }
 
     /**

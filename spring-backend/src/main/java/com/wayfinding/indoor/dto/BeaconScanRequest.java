@@ -20,8 +20,8 @@ public class BeaconScanRequest {
     @AllArgsConstructor
     public static class ScannedBeacon {
         private String uuid;
-        private int major;
-        private int minor;
+        private Integer major;
+        private Integer minor;
         private int rssi;  // Signal strength
     }
 }

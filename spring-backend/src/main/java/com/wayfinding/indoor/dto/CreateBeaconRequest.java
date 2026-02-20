@@ -7,8 +7,8 @@ public class CreateBeaconRequest {
     private String buildingId;
     private String floorId;
     private String uuid;
-    private int major;
-    private int minor;
+    private Integer major;
+    private Integer minor;
     private double x;
     private double y;
     private String label;

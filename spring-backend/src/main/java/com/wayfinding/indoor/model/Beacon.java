@@ -6,7 +6,6 @@ import lombok.AllArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
-import org.springframework.data.mongodb.core.index.CompoundIndexes;
 
 import java.time.LocalDateTime;
 
@@ -14,9 +13,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Document(collection = "beacons")
-@CompoundIndexes({
-    @CompoundIndex(name = "beacon_identifier", def = "{'uuid': 1, 'major': 1, 'minor': 1}", unique = true)
-})
+@CompoundIndex(name = "beacon_uuid_major_minor", def = "{'uuid': 1, 'major': 1, 'minor': 1}", unique = true)
 public class Beacon {
     @Id
     private String id;
@@ -24,10 +21,10 @@ public class Beacon {
     private String buildingId;
     private String floorId;
     
-    // iBeacon identifiers (strictly following iBeacon protocol)
-    private String uuid;  // UUID string (e.g., "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0")
-    private int major;    // Major value (0-65535)
-    private int minor;    // Minor value (0-65535)
+    // iBeacon fields (UUID + Major + Minor)
+    private String uuid; // e.g., "00010203-0405-0607-0809-0a0b0c0d0e0f"
+    private Integer major;
+    private Integer minor;
     
     // Position on the floor map (0,0 is top-left)
     private double x;
@@ -42,7 +39,7 @@ public class Beacon {
     public Beacon(String buildingId, String floorId, String uuid, int major, int minor, double x, double y) {
         this.buildingId = buildingId;
         this.floorId = floorId;
-        this.uuid = uuid;
+        this.uuid = uuid != null ? uuid.toUpperCase() : null;
         this.major = major;
         this.minor = minor;
         this.x = x;

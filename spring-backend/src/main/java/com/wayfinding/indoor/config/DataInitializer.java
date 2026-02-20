@@ -54,8 +54,7 @@ public class DataInitializer implements CommandLineRunner {
         floor = floorRepository.save(floor);
         log.info("Created floor: {}", floor.getId());
 
-        // Create sample beacons (3 beacons for validation)
-        String sampleUuid = "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0";
+        String sampleUuid = "00010203-0405-0607-0809-0a0b0c0d0e0f";
 
         Beacon beacon1 = new Beacon(
                 building.getId(),

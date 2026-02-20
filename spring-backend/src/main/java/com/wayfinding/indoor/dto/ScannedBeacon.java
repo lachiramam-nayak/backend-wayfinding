@@ -8,8 +8,6 @@ import lombok.AllArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ScannedBeacon {
-    private String uuid;
-    private int major;
-    private int minor;
+    private String mac;
     private int rssi;  // Received Signal Strength Indicator (negative value, e.g., -50 to -100)
 }

@@ -46,28 +46,32 @@ public class BeaconController {
     public ResponseEntity<Beacon> getBeacon(@PathVariable String id) {
         log.info("GET /api/beacons/{} - Fetching beacon by ID", id);
         return beaconService.getBeacon(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+            .map(ResponseEntity::ok)
+            .orElse(ResponseEntity.<Beacon>notFound().build());
     }
 
     @PostMapping
     public ResponseEntity<Beacon> createBeacon(@RequestBody CreateBeaconRequest request) {
         log.info("POST /api/beacons - Creating new beacon: UUID={}, major={}, minor={}", 
-                 request.getUuid(), request.getMajor(), request.getMinor());
+            request.getUuid(), request.getMajor(), request.getMinor());
         
         if (request.getBuildingId() == null || request.getBuildingId().isEmpty()) {
             log.error("Building ID is required");
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.<Beacon>badRequest().build();
         }
         
         if (request.getFloorId() == null || request.getFloorId().isEmpty()) {
             log.error("Floor ID is required");
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.<Beacon>badRequest().build();
         }
         
         if (request.getUuid() == null || request.getUuid().isEmpty()) {
             log.error("UUID is required");
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.<Beacon>badRequest().build();
+        }
+        if (request.getMajor() == null || request.getMinor() == null) {
+            log.error("Major and minor are required");
+            return ResponseEntity.<Beacon>badRequest().build();
         }
 
         try {
@@ -75,7 +79,7 @@ public class BeaconController {
             return ResponseEntity.status(HttpStatus.CREATED).body(created);
         } catch (IllegalArgumentException e) {
             log.error("Error creating beacon: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+            return ResponseEntity.<Beacon>status(HttpStatus.CONFLICT).build();
         }
     }
 
@@ -85,8 +89,8 @@ public class BeaconController {
         log.info("PUT /api/beacons/{} - Updating beacon", id);
         
         return beaconService.updateBeacon(id, request)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+            .map(ResponseEntity::ok)
+            .orElse(ResponseEntity.<Beacon>notFound().build());
     }
 
     @DeleteMapping("/{id}")

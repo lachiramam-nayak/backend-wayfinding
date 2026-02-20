@@ -20,7 +20,7 @@ public class PositionResponse {
     private int floorNumber;
     private double x;
     private double y;
-    private String method; // nearest, weighted
+    private String method; // mac
     private int beaconsUsed;
     private boolean valid;
     private String errorMessage;

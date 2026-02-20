@@ -12,6 +12,5 @@ public interface BeaconRepository extends MongoRepository<Beacon, String> {
     List<Beacon> findByFloorId(String floorId);
     List<Beacon> findByBuildingId(String buildingId);
     List<Beacon> findByBuildingIdAndFloorId(String buildingId, String floorId);
-    Optional<Beacon> findByUuidAndMajorAndMinor(String uuid, int major, int minor);
+    Optional<Beacon> findByUuidAndMajorAndMinor(String uuid, Integer major, Integer minor);
 }
-

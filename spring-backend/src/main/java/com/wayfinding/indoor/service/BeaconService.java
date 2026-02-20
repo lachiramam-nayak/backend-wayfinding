@@ -59,19 +59,11 @@ public class BeaconService {
     }
 
     /**
-     * Get beacon by UUID, major, and minor
-     */
-    public Optional<Beacon> getBeaconByUuidAndMajorMinor(String uuid, int major, int minor) {
-        log.info("Fetching beacon with UUID: {}, major: {}, minor: {}", uuid, major, minor);
-        return beaconRepository.findByUuidAndMajorAndMinor(uuid.toUpperCase(), major, minor);
-    }
-
-    /**
      * Create a new beacon
      */
     public Beacon createBeacon(CreateBeaconRequest request) {
         log.info("Creating beacon: UUID={}, major={}, minor={} in floor: {}", 
-                 request.getUuid(), request.getMajor(), request.getMinor(), request.getFloorId());
+            request.getUuid(), request.getMajor(), request.getMinor(), request.getFloorId());
 
         // Validate required fields
         if (request.getBuildingId() == null || request.getBuildingId().isEmpty()) {
@@ -83,22 +75,27 @@ public class BeaconService {
         if (request.getUuid() == null || request.getUuid().isEmpty()) {
             throw new IllegalArgumentException("UUID is required");
         }
+        if (request.getMajor() == null || request.getMinor() == null) {
+            throw new IllegalArgumentException("Major and minor are required");
+        }
+        if (request.getMajor() < 0 || request.getMinor() < 0) {
+            throw new IllegalArgumentException("Major and minor must be non-negative");
+        }
 
-        // Check if beacon with same UUID, major, minor already exists
         String uuid = request.getUuid().toUpperCase();
         if (beaconRepository.findByUuidAndMajorAndMinor(uuid, request.getMajor(), request.getMinor()).isPresent()) {
             throw new IllegalArgumentException("Beacon with UUID=" + uuid + ", major=" + request.getMajor() 
-                    + ", minor=" + request.getMinor() + " already exists");
+                + ", minor=" + request.getMinor() + " already exists");
         }
 
         Beacon beacon = new Beacon(
-                request.getBuildingId(),
-                request.getFloorId(),
-                uuid,
-                request.getMajor(),
-                request.getMinor(),
-                request.getX(),
-                request.getY()
+            request.getBuildingId(),
+            request.getFloorId(),
+            uuid,
+            request.getMajor(),
+            request.getMinor(),
+            request.getX(),
+            request.getY()
         );
 
         if (request.getLabel() != null && !request.getLabel().isEmpty()) {
@@ -125,10 +122,10 @@ public class BeaconService {
             if (request.getUuid() != null && !request.getUuid().isEmpty()) {
                 beacon.setUuid(request.getUuid().toUpperCase());
             }
-            if (request.getMajor() > 0) {
+            if (request.getMajor() != null && request.getMajor() >= 0) {
                 beacon.setMajor(request.getMajor());
             }
-            if (request.getMinor() > 0) {
+            if (request.getMinor() != null && request.getMinor() >= 0) {
                 beacon.setMinor(request.getMinor());
             }
             if (request.getX() > 0) {
