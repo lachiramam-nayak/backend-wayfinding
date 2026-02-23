@@ -12,6 +12,7 @@ import {
   BeaconScannerStatus,
   BeaconScannerOptions
 } from '../services/beaconScanner';
+import { IndoorTracker } from '../services/indoorTracking';
 import {
   positioningApi,
   PositionResponse,
@@ -67,6 +68,7 @@ export function useBeaconScanner(): UseBeaconScannerResult {
   const rssiThresholdRef = useRef<number>(-75);
   const setUserLocation = useAppStore((s) => s.setUserLocation);
   const setNavigationRouteStore = useAppStore((s) => s.setNavigationRoute);
+  const trackerRef = useRef<IndoorTracker | null>(null);
 
   // Update ref when position changes
   useEffect(() => {
@@ -81,6 +83,10 @@ export function useBeaconScanner(): UseBeaconScannerResult {
 
     if (beacons.length === 0) {
       return;
+    }
+
+    if (trackerRef.current) {
+      trackerRef.current.ingestBeacons(beacons);
     }
 
     const usable = beacons.filter((b) => (b.avgRssi ?? b.rssi) >= (rssiThresholdRef.current ?? -75));
@@ -137,6 +143,15 @@ export function useBeaconScanner(): UseBeaconScannerResult {
     } finally {
       setIsPositioning(false);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!trackerRef.current) {
+      trackerRef.current = new IndoorTracker();
+    }
+    return () => {
+      trackerRef.current?.stopSensors();
+    };
   }, []);
 
   /**

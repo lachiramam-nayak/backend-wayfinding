@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { Pedometer } from 'expo-sensors';
+import { IndoorTracker } from '../../src/services/indoorTracking';
 
 import { IndoorMapViewer } from '../../src/components/IndoorMapViewer';
 import { FloorSelector } from '../../src/components/FloorSelector';
@@ -62,7 +62,8 @@ export default function MapScreen() {
   const stepSubRef = useRef<any>(null);
   const lastStepCountRef = useRef<number | null>(null);
   const stepRouteIndexRef = useRef<number>(0);
-  const ROUTE_STEP_PX = 8;
+  const trackerRef = useRef<IndoorTracker | null>(null);
+  const lastDeviationAtRef = useRef<number>(0);
 
   const floorBuildingId = useMemo(() => {
     if (!selectedFloor) return undefined;
@@ -196,32 +197,7 @@ export default function MapScreen() {
 
   const autoRoute = useMemo(() => {
     if (!effectiveRoute || effectiveRoute.length === 0) return [];
-    const densify = (route: Array<{ x: number; y: number; type?: string }>, stepPx: number) => {
-      if (route.length === 1) return route;
-      const out: Array<{ x: number; y: number; type: string }> = [];
-      for (let i = 0; i < route.length - 1; i += 1) {
-        const a = route[i];
-        const b = route[i + 1];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const steps = Math.max(1, Math.ceil(dist / stepPx));
-        for (let s = 0; s <= steps; s += 1) {
-          const t = s / steps;
-          const x = a.x + dx * t;
-          const y = a.y + dy * t;
-          out.push({
-            x,
-            y,
-            type: i === 0 && s === 0 ? 'start' : i === route.length - 2 && s === steps ? 'destination' : 'waypoint',
-          });
-        }
-      }
-      return out;
-    };
-
-    // Smooth movement by interpolating along the polyline
-    return densify(effectiveRoute, ROUTE_STEP_PX);
+    return effectiveRoute.map((p) => ({ x: p.x, y: p.y }));
   }, [effectiveRoute]);
 
   useEffect(() => {
@@ -257,36 +233,49 @@ export default function MapScreen() {
 
 
   useEffect(() => {
-    if (!effectiveRoute || effectiveRoute.length === 0) {
-      setRouteIndex(0);
-      stepRouteIndexRef.current = 0;
-      return;
+    if (!trackerRef.current) {
+      trackerRef.current = new IndoorTracker();
+      trackerRef.current.setPositionCallback((pos) => {
+        if (!userLocation) return;
+        setUserLocation({
+          building_id: userLocation.building_id,
+          floor_id: userLocation.floor_id,
+          x: pos.x,
+          y: pos.y,
+          source: pos.source,
+          timestamp: pos.timestamp,
+        });
+      });
+      trackerRef.current.setDeviationCallback(() => {
+        const now = Date.now();
+        if (now - lastDeviationAtRef.current > 3000) {
+          lastDeviationAtRef.current = now;
+          computeRoute();
+        }
+      });
     }
-    setRouteIndex(0);
-    stepRouteIndexRef.current = 0;
-  }, [effectiveRoute]);
-
-  const findNearestRouteIndex = useCallback((route: Array<{ x: number; y: number }>, x: number, y: number) => {
-    let bestIdx = 0;
-    let bestDist = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < route.length; i += 1) {
-      const dx = route[i].x - x;
-      const dy = route[i].y - y;
-      const d = dx * dx + dy * dy;
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-    return bestIdx;
-  }, []);
+  }, [computeRoute, setUserLocation, userLocation]);
 
   useEffect(() => {
-    if (!autoRoute || autoRoute.length < 2 || !userLocation) return;
-    if (locationMode === 'beacon') {
-      stepRouteIndexRef.current = findNearestRouteIndex(autoRoute, userLocation.x, userLocation.y);
+    if (!trackerRef.current || !selectedFloor) return;
+    trackerRef.current.setConfig({
+      scanIntervalMs: 500,
+      stepLengthM: 0.7,
+      rssiThreshold: -90,
+      kalmanProcessNoise: 0.01,
+      kalmanMeasurementNoise: 2,
+      deviationThresholdM: 2,
+      snapToleranceM: 1.5,
+      n: 2.5,
+    });
+    trackerRef.current.setBeacons(beacons);
+    trackerRef.current.setRoute(autoRoute, selectedFloor.scale || 10);
+    if (stepMoveEnabled) {
+      trackerRef.current.startSensors();
+    } else {
+      trackerRef.current.stopSensors();
     }
-  }, [autoRoute, userLocation?.x, userLocation?.y, locationMode, findNearestRouteIndex]);
+  }, [beacons, autoRoute, selectedFloor, stepMoveEnabled]);
 
   useEffect(() => {
     return () => {
@@ -399,88 +388,10 @@ export default function MapScreen() {
 
 
   useEffect(() => {
-    if (!autoMove || locationMode !== 'mock' || !autoRoute || autoRoute.length === 0) {
-      return;
-    }
-    const route = autoRoute;
-    const timer = setInterval(() => {
-      setRouteIndex((prev) => {
-        const next = Math.min(prev + 1, route.length - 1);
-        const point = route[next];
-        setUserLocation((prevLoc) =>
-          prevLoc
-            ? {
-                ...prevLoc,
-                x: point.x,
-                y: point.y,
-                timestamp: new Date(),
-              }
-            : prevLoc
-        );
-        if (next >= route.length - 1) {
-          setAutoMove(false);
-        }
-        return next;
-      });
-    }, 120);
-    return () => clearInterval(timer);
-  }, [autoMove, locationMode, autoRoute, setUserLocation]);
-
-  useEffect(() => {
-    // Step-based movement along the route (can blend with beacon updates)
-    if (!stepMoveEnabled || !autoRoute || autoRoute.length < 2) {
-      if (stepSubRef.current) {
-        stepSubRef.current.remove();
-        stepSubRef.current = null;
-      }
-      lastStepCountRef.current = null;
-      return;
-    }
-
-    let active = true;
-    (async () => {
-      const available = await Pedometer.isAvailableAsync();
-      if (!active) return;
-      if (!available) {
-        Alert.alert('Step Detection Not Available', 'Your device does not support step detection.');
-        setStepMoveEnabled(false);
-        return;
-      }
-      stepSubRef.current = Pedometer.watchStepCount((result) => {
-        if (!autoRoute || autoRoute.length === 0) return;
-        const prevCount = lastStepCountRef.current;
-        lastStepCountRef.current = result.steps;
-        if (prevCount == null) {
-          return;
-        }
-        const delta = result.steps - prevCount;
-        if (delta <= 0) return;
-
-        const pixelsPerMeter = selectedFloor?.scale ?? 10;
-        const stepPixels = pixelsPerMeter * 0.5; // 50 cm per step
-        const stepAdvance = Math.max(1, Math.round(stepPixels / ROUTE_STEP_PX));
-
-        let idx = stepRouteIndexRef.current;
-        idx = Math.min(idx + delta * stepAdvance, autoRoute.length - 1);
-        stepRouteIndexRef.current = idx;
-        const point = autoRoute[idx];
-        setUserLocation((prevLoc) =>
-          prevLoc
-            ? { ...prevLoc, x: point.x, y: point.y, timestamp: new Date(), source: 'sensor' }
-            : prevLoc
-        );
-      });
-    })();
-
     return () => {
-      active = false;
-      if (stepSubRef.current) {
-        stepSubRef.current.remove();
-        stepSubRef.current = null;
-      }
-      lastStepCountRef.current = null;
+      trackerRef.current?.stopSensors();
     };
-  }, [stepMoveEnabled, locationMode, autoRoute, setUserLocation, selectedFloor]);
+  }, []);
 
   const displayedRoute = useMemo(() => {
     if (!effectiveRoute || effectiveRoute.length === 0) {
