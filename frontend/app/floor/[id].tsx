@@ -25,6 +25,7 @@ import { Floor, Beacon, POI, UserLocation } from '../../src/store/appStore';
 import { floorApi, beaconApi, poiApi, navigationApi } from '../../src/services/api';
 import { useBeaconScanner } from '../../src/hooks/useBeaconScanner';
 import { useAppStore } from '../../src/store/appStore';
+import { getTurnInstruction } from '../../src/utils/turnInstruction';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
@@ -84,6 +85,7 @@ export default function FloorDetailScreen() {
   const [isNavigating, setIsNavigating] = useState(false);
   const [showDestinationMode, setShowDestinationMode] = useState(false);
   const [destinationQuery, setDestinationQuery] = useState('');
+  const turnInstruction = getTurnInstruction(userLocation, navigationRoute?.route);
 
   // Update user location when position changes
   useEffect(() => {
@@ -101,7 +103,7 @@ export default function FloorDetailScreen() {
   }, [currentPosition, id]);
 
   const handleStartBeaconScanning = async () => {
-    const success = await startBeaconScanning({ batchInterval: 2000, rssiThreshold: -90 });
+    const success = await startBeaconScanning({ batchInterval: 2000, rssiThreshold: -88 });
     if (!success && Platform.OS !== 'web') {
       Alert.alert('Beacon Scanning Failed', scannerStatus.error || 'Could not start Bluetooth scanning. Please check permissions and try again.');
     }
@@ -532,6 +534,8 @@ export default function FloorDetailScreen() {
               pois={pois}
               onMapPress={handleMapPress}
               showDestinationMode={showDestinationMode}
+              showRouteLine={true}
+              showTurnPrompt={false}
             />
           </View>
         );
@@ -590,6 +594,11 @@ export default function FloorDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
+      {!!turnInstruction && !showDestinationMode && (
+        <View style={styles.turnPromptScreen} pointerEvents="none">
+          <Text style={styles.turnPromptText}>{turnInstruction}</Text>
+        </View>
+      )}
       <Stack.Screen options={{ headerTitle: `Floor ${floor.floor_number}: ${floor.name}` }} />
       <ScrollView
         style={styles.scrollView}
@@ -1171,5 +1180,22 @@ const styles = StyleSheet.create({
   emptyDestinationText: {
     color: '#888',
     fontSize: 12,
+  },
+  turnPromptScreen: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 22,
+    paddingHorizontal: 22,
+    borderRadius: 999,
+    zIndex: 50,
+  },
+  turnPromptText: {
+    color: '#0B3D91',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
   },
 });

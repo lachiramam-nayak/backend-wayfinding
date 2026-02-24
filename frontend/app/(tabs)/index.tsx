@@ -12,18 +12,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { IndoorMapViewer, IndoorMapViewerHandle } from '../../src/components/IndoorMapViewer';
 import { IndoorTracker } from '../../src/services/indoorTracking';
-
-import { IndoorMapViewer } from '../../src/components/IndoorMapViewer';
 import { FloorSelector } from '../../src/components/FloorSelector';
-import { LocationStatus } from '../../src/components/LocationStatus';
 import { EmptyState } from '../../src/components/EmptyState';
 import { ListSkeleton } from '../../src/components/SkeletonLoader';
 import { useAppStore, Building, Floor, POI, Beacon } from '../../src/store/appStore';
 import { buildingApi, floorApi, poiApi, beaconApi, navigationApi } from '../../src/services/api';
+import { getTurnInstruction } from '../../src/utils/turnInstruction';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-
 export default function MapScreen() {
   const router = useRouter();
   const {
@@ -31,13 +29,11 @@ export default function MapScreen() {
     selectedFloor,
     selectedDestination,
     userLocation,
-    locationMode,
     setSelectedBuilding,
     setSelectedFloor,
     setSelectedDestination,
     setUserLocation,
     setLocationMode,
-    clearLocation,
   } = useAppStore();
 
   const [buildings, setBuildings] = useState<Building[]>([]);
@@ -50,35 +46,18 @@ export default function MapScreen() {
   const [destinationQuery, setDestinationQuery] = useState('');
   const [navigationRoute, setNavigationRoute] = useState<any>(null);
   const [isNavigating, setIsNavigating] = useState(false);
-  const [mockIndex, setMockIndex] = useState(0);
-  const [autoMove, setAutoMove] = useState(false);
-  const [routeIndex, setRouteIndex] = useState(0);
-  const AUTO_MOVE_DELAY_MS = 10000;
-  const autoMoveDelayTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const [autoMoveRequested, setAutoMoveRequested] = useState(false);
+  const [mapInteracting, setMapInteracting] = useState(false);
   const [fixedRoute, setFixedRoute] = useState<Array<{ x: number; y: number; type: string }> | null>(null);
   const [fixedRouteKey, setFixedRouteKey] = useState<string | null>(null);
-  const [stepMoveEnabled, setStepMoveEnabled] = useState(false);
-  const stepSubRef = useRef<any>(null);
-  const lastStepCountRef = useRef<number | null>(null);
-  const stepRouteIndexRef = useRef<number>(0);
   const trackerRef = useRef<IndoorTracker | null>(null);
-  const lastDeviationAtRef = useRef<number>(0);
+  const baseInfoRef = useRef<{ building_id: string; floor_id: string } | null>(null);
+  const mapRef = useRef<IndoorMapViewerHandle | null>(null);
 
   const floorBuildingId = useMemo(() => {
     if (!selectedFloor) return undefined;
     const anyFloor = selectedFloor as any;
     return anyFloor.building_id ?? anyFloor.buildingId;
   }, [selectedFloor]);
-
-  const entryPoint = useMemo(() => {
-    const poi = pois.find((p) => p.name?.toLowerCase() === 'entry gate')
-      || pois.find((p) => (p.name || '').toLowerCase().includes('entry'));
-    if (poi) {
-      return { x: poi.x, y: poi.y };
-    }
-    return { x: 191, y: 89 };
-  }, [pois]);
 
   const loadData = useCallback(async () => {
     try {
@@ -195,11 +174,6 @@ export default function MapScreen() {
     return [];
   }, [fixedRoute, fixedRouteKey, navigationRoute, userLocation, selectedDestination, selectedFloor]);
 
-  const autoRoute = useMemo(() => {
-    if (!effectiveRoute || effectiveRoute.length === 0) return [];
-    return effectiveRoute.map((p) => ({ x: p.x, y: p.y }));
-  }, [effectiveRoute]);
-
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -213,55 +187,37 @@ export default function MapScreen() {
   }, [loadFloorData]);
 
   useEffect(() => {
-    if (!selectedFloor || userLocation || locationMode) return;
-    // Default mock start: Entry Door for F1 map
-    setMockIndex(0);
-    setUserLocation({
-      building_id: floorBuildingId || '',
-      floor_id: selectedFloor.id,
-      x: entryPoint.x,
-      y: entryPoint.y,
-      source: 'mock',
-      timestamp: new Date(),
-    });
-    setLocationMode('mock');
-  }, [selectedFloor, userLocation, locationMode, setUserLocation, setLocationMode, entryPoint, floorBuildingId]);
-
-  useEffect(() => {
     computeRoute();
   }, [computeRoute]);
-
 
   useEffect(() => {
     if (!trackerRef.current) {
       trackerRef.current = new IndoorTracker();
       trackerRef.current.setPositionCallback((pos) => {
-        if (!userLocation) return;
+        const base = baseInfoRef.current;
+        if (!base) return;
         setUserLocation({
-          building_id: userLocation.building_id,
-          floor_id: userLocation.floor_id,
+          building_id: base.building_id,
+          floor_id: base.floor_id,
           x: pos.x,
           y: pos.y,
           source: pos.source,
           timestamp: pos.timestamp,
         });
+        setLocationMode(pos.source);
       });
       trackerRef.current.setDeviationCallback(() => {
-        const now = Date.now();
-        if (now - lastDeviationAtRef.current > 3000) {
-          lastDeviationAtRef.current = now;
-          computeRoute();
-        }
+        computeRoute();
       });
     }
-  }, [computeRoute, setUserLocation, userLocation]);
+  }, [computeRoute, setLocationMode, setUserLocation]);
 
   useEffect(() => {
     if (!trackerRef.current || !selectedFloor) return;
     trackerRef.current.setConfig({
       scanIntervalMs: 500,
       stepLengthM: 0.7,
-      rssiThreshold: -90,
+      rssiThreshold: -88,
       kalmanProcessNoise: 0.01,
       kalmanMeasurementNoise: 2,
       deviationThresholdM: 2,
@@ -269,42 +225,30 @@ export default function MapScreen() {
       n: 2.5,
     });
     trackerRef.current.setBeacons(beacons);
-    trackerRef.current.setRoute(autoRoute, selectedFloor.scale || 10);
-    if (stepMoveEnabled) {
+    trackerRef.current.setRoute(
+      displayedRoute ? displayedRoute.map((p) => ({ x: p.x, y: p.y })) : [],
+      selectedFloor.scale || 10
+    );
+  }, [beacons, displayedRoute, selectedFloor]);
+
+  useEffect(() => {
+    if (!trackerRef.current) return;
+    if (userLocation && selectedFloor && userLocation.floor_id === selectedFloor.id) {
+      if (userLocation.source !== 'sensor') {
+        baseInfoRef.current = {
+          building_id: userLocation.building_id,
+          floor_id: userLocation.floor_id,
+        };
+        trackerRef.current.setAnchorPosition(userLocation.x, userLocation.y);
+      }
       trackerRef.current.startSensors();
     } else {
       trackerRef.current.stopSensors();
     }
-  }, [beacons, autoRoute, selectedFloor, stepMoveEnabled]);
-
-  useEffect(() => {
     return () => {
-      if (autoMoveDelayTimerRef.current) {
-        clearTimeout(autoMoveDelayTimerRef.current);
-        autoMoveDelayTimerRef.current = null;
-      }
+      trackerRef.current?.stopSensors();
     };
-  }, []);
-
-  useEffect(() => {
-    if (!autoMoveRequested) return;
-    if (autoMoveDelayTimerRef.current) {
-      clearTimeout(autoMoveDelayTimerRef.current);
-      autoMoveDelayTimerRef.current = null;
-    }
-    if (locationMode === 'mock' && effectiveRoute && effectiveRoute.length > 1) {
-      autoMoveDelayTimerRef.current = setTimeout(() => {
-        setAutoMove(true);
-        setAutoMoveRequested(false);
-      }, AUTO_MOVE_DELAY_MS);
-    }
-    return () => {
-      if (autoMoveDelayTimerRef.current) {
-        clearTimeout(autoMoveDelayTimerRef.current);
-        autoMoveDelayTimerRef.current = null;
-      }
-    };
-  }, [autoMoveRequested, locationMode, effectiveRoute]);
+  }, [userLocation, selectedFloor]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -319,10 +263,8 @@ export default function MapScreen() {
     setShowDestinations(false);
     setDestinationQuery('');
     setNavigationRoute(null);
-    setAutoMove(false);
     setFixedRoute(null);
     setFixedRouteKey(null);
-    setAutoMoveRequested(true);
   };
 
   const handleClearDestination = () => {
@@ -330,68 +272,7 @@ export default function MapScreen() {
     setNavigationRoute(null);
     setFixedRoute(null);
     setFixedRouteKey(null);
-    setAutoMove(false);
-    setAutoMoveRequested(false);
   };
-
-  const setMockLocation = (index: number) => {
-    if (!selectedFloor) return;
-    if (index === 0) {
-      setMockIndex(0);
-      setUserLocation({
-        building_id: floorBuildingId || '',
-        floor_id: selectedFloor.id,
-        x: entryPoint.x,
-        y: entryPoint.y,
-        source: 'mock',
-        timestamp: new Date(),
-      });
-      setLocationMode('mock');
-      return;
-    }
-    if (beacons.length > 0) {
-      const nextIndex = Math.max(1, Math.min(index, beacons.length));
-      const beacon = beacons[nextIndex - 1];
-      setMockIndex(nextIndex);
-      setUserLocation({
-        building_id: beacon.building_id || floorBuildingId || '',
-        floor_id: beacon.floor_id,
-        x: beacon.x,
-        y: beacon.y,
-        source: 'mock',
-        timestamp: new Date(),
-      });
-      setLocationMode('mock');
-      return;
-    }
-    // Fallback: center of the selected floor
-    setMockIndex(0);
-    setUserLocation({
-      building_id: floorBuildingId || '',
-      floor_id: selectedFloor.id,
-      x: selectedFloor.width / 2,
-      y: selectedFloor.height / 2,
-      source: 'mock',
-      timestamp: new Date(),
-    });
-    setLocationMode('mock');
-  };
-
-  const handleNextMock = () => {
-    if (beacons.length === 0) {
-      setMockLocation(0);
-      return;
-    }
-    const next = (mockIndex + 1) % (beacons.length + 1);
-    setMockLocation(next);
-  };
-
-
-  useEffect(() => {
-    return () => {
-      trackerRef.current?.stopSensors();
-    };
-  }, []);
 
   const displayedRoute = useMemo(() => {
     if (!effectiveRoute || effectiveRoute.length === 0) {
@@ -399,6 +280,10 @@ export default function MapScreen() {
     }
     return effectiveRoute;
   }, [effectiveRoute]);
+
+  const turnInstruction = useMemo(() => {
+    return getTurnInstruction(userLocation, displayedRoute);
+  }, [userLocation, displayedRoute]);
 
   const handleNavigate = async () => {
     if (!userLocation || !selectedDestination || !selectedFloor) {
@@ -477,9 +362,15 @@ export default function MapScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
+      {!!turnInstruction && !showDestinations && (
+        <View style={styles.turnPromptScreen} pointerEvents="none">
+          <Text style={styles.turnPromptText}>{turnInstruction}</Text>
+        </View>
+      )}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
+        scrollEnabled={!mapInteracting}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -517,56 +408,6 @@ export default function MapScreen() {
           selectedFloor={selectedFloor}
           onSelectFloor={setSelectedFloor}
         />
-
-        {/* Location Status */}
-        <LocationStatus
-          userLocation={userLocation}
-          locationMode={locationMode}
-          buildingName={selectedBuilding?.name}
-          floorName={selectedFloor?.name}
-          onClear={clearLocation}
-        />
-        {selectedFloor && (
-          <View style={styles.mockRow}>
-            <TouchableOpacity
-              style={styles.mockButton}
-              onPress={() => setMockLocation(mockIndex)}
-            >
-              <Ionicons name="compass-outline" size={16} color="#fff" />
-              <Text style={styles.mockButtonText}>
-                {locationMode === 'mock' ? 'Reset Mock Location' : 'Use Mock Location'}
-              </Text>
-            </TouchableOpacity>
-            {beacons.length > 1 && locationMode === 'mock' && (
-              <TouchableOpacity style={styles.mockButtonSecondary} onPress={handleNextMock}>
-                <Ionicons name="play-skip-forward" size={16} color="#4A90FF" />
-                <Text style={styles.mockButtonSecondaryText}>Next Mock Point</Text>
-              </TouchableOpacity>
-            )}
-            {locationMode === 'mock' && effectiveRoute.length > 1 && (
-              <TouchableOpacity
-                style={styles.mockButtonSecondary}
-                onPress={() => setAutoMove((prev) => !prev)}
-              >
-                <Ionicons name={autoMove ? 'pause' : 'play'} size={16} color="#4A90FF" />
-                <Text style={styles.mockButtonSecondaryText}>
-                  {autoMove ? 'Stop Auto' : 'Auto Move'}
-                </Text>
-              </TouchableOpacity>
-            )}
-            {effectiveRoute.length > 1 && (
-              <TouchableOpacity
-                style={styles.mockButtonSecondary}
-                onPress={() => setStepMoveEnabled((prev) => !prev)}
-              >
-                <Ionicons name={stepMoveEnabled ? 'pause' : 'walk'} size={16} color="#4A90FF" />
-                <Text style={styles.mockButtonSecondaryText}>
-                  {stepMoveEnabled ? 'Stop Steps' : 'Step Move'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
 
         {/* Destination Selector */}
         {selectedFloor && (
@@ -611,21 +452,6 @@ export default function MapScreen() {
                 </TouchableOpacity>
               )}
             </View>
-
-            {selectedDestination && userLocation && userLocation.floor_id === selectedFloor.id && (
-              <View style={styles.destinationActionRow}>
-                <TouchableOpacity
-                  style={styles.navigateButton}
-                  onPress={handleNavigate}
-                  disabled={isNavigating}
-                >
-                  <Ionicons name="navigate" size={18} color="#fff" />
-                  <Text style={styles.navigateButtonText}>
-                    {isNavigating ? 'Routing...' : 'Navigate'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
 
             {(showDestinations || destinationQuery.trim().length > 0) && (
               <View style={styles.destinationList}>
@@ -685,10 +511,40 @@ export default function MapScreen() {
           </View>
         )}
 
+        {selectedFloor && (
+          <View style={styles.mapControls}>
+            <TouchableOpacity
+              style={styles.mapControlButton}
+              onPress={() => mapRef.current?.rotateBy(-90)}
+            >
+              <Text style={styles.mapControlText}>Rotate</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.mapControlButton}
+              onPress={() => mapRef.current?.resetView()}
+            >
+              <Text style={styles.mapControlText}>Reset</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.mapControlButton}
+              onPress={() => mapRef.current?.zoomBy(0.25)}
+            >
+              <Text style={styles.mapControlText}>+</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.mapControlButton}
+              onPress={() => mapRef.current?.zoomBy(-0.25)}
+            >
+              <Text style={styles.mapControlText}>−</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Indoor Map */}
         {selectedFloor ? (
           <View style={styles.mapSection}>
             <IndoorMapViewer
+              ref={mapRef}
               mapImage={
                 selectedFloor.mapImageUrl
                   ? `${API_URL}${selectedFloor.mapImageUrl}`
@@ -709,6 +565,10 @@ export default function MapScreen() {
               beacons={beacons}
               showMarkers={true}
               showRoutePoints={false}
+              showRouteLine={true}
+              showTurnPrompt={false}
+              onInteractionStart={() => setMapInteracting(true)}
+              onInteractionEnd={() => setMapInteracting(false)}
             />
           </View>
         ) : (
@@ -724,28 +584,24 @@ export default function MapScreen() {
           />
         )}
 
-        {/* Map Legend */}
-        <View style={styles.legend}>
-          <Text style={styles.legendTitle}>Map Legend</Text>
-          <View style={styles.legendItems}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#4A90FF' }]} />
-              <Text style={styles.legendText}>Your Location</Text>
+        {selectedFloor &&
+          selectedDestination &&
+          userLocation &&
+          userLocation.floor_id === selectedFloor.id && (
+            <View style={styles.navigationCta}>
+              <TouchableOpacity
+                style={styles.navigateButton}
+                onPress={handleNavigate}
+                disabled={isNavigating}
+              >
+                <Ionicons name="navigate" size={18} color="#fff" />
+                <Text style={styles.navigateButtonText}>
+                  {isNavigating ? 'Routing...' : 'Navigate'}
+                </Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#FF6B6B' }]} />
-              <Text style={styles.legendText}>Destination</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#4ECDC4' }]} />
-              <Text style={styles.legendText}>Points of Interest</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#A78BFA' }]} />
-              <Text style={styles.legendText}>Beacons</Text>
-            </View>
-          </View>
-        </View>
+          )}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -823,42 +679,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
   },
-  mockRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 12,
-  },
-  mockButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#4A90FF',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  mockButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  mockButtonSecondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#1a1a2e',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#4A90FF',
-  },
-  mockButtonSecondaryText: {
-    color: '#4A90FF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
   destinationList: {
     borderTopWidth: 1,
     borderTopColor: '#252542',
@@ -877,23 +697,62 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
   },
-  destinationActionRow: {
-    paddingHorizontal: 12,
-    paddingBottom: 12,
+  mapControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 999,
+    padding: 12,
+    gap: 8,
+    marginBottom: 12,
+  },
+  mapControlButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 999,
+    paddingVertical: 8,
+  },
+  mapControlText: {
+    color: '#0B3D91',
+    fontSize: 13,
+    fontWeight: '700',
   },
   navigateButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#A78BFA',
+    backgroundColor: '#22C55E',
     borderRadius: 8,
-    paddingVertical: 10,
+    paddingVertical: 22,
+    paddingHorizontal: 22,
     gap: 6,
   },
   navigateButtonText: {
     color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  navigationCta: {
+    marginBottom: 16,
+  },
+  turnPromptScreen: {
+    position: 'absolute',
+    top: 8,
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 22,
+    paddingHorizontal: 22,
+    borderRadius: 999,
+    zIndex: 50,
+  },
+  turnPromptText: {
+    color: '#0B3D91',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   destinationItem: {
     flexDirection: 'row',
@@ -922,35 +781,5 @@ const styles = StyleSheet.create({
   emptyDestinationText: {
     color: '#888',
     fontSize: 12,
-  },
-  legend: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: 12,
-    padding: 12,
-  },
-  legendTitle: {
-    color: '#888',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  legendItems: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  legendDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  legendText: {
-    color: '#aaa',
-    fontSize: 11,
   },
 });

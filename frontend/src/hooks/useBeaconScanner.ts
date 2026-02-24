@@ -65,7 +65,7 @@ export function useBeaconScanner(): UseBeaconScannerResult {
 
   // Refs to track latest values in callbacks
   const currentPositionRef = useRef<PositionResponse | null>(null);
-  const rssiThresholdRef = useRef<number>(-75);
+  const rssiThresholdRef = useRef<number>(-88);
   const setUserLocation = useAppStore((s) => s.setUserLocation);
   const setNavigationRouteStore = useAppStore((s) => s.setNavigationRoute);
   const trackerRef = useRef<IndoorTracker | null>(null);
@@ -89,9 +89,9 @@ export function useBeaconScanner(): UseBeaconScannerResult {
       trackerRef.current.ingestBeacons(beacons);
     }
 
-    const usable = beacons.filter((b) => (b.avgRssi ?? b.rssi) >= (rssiThresholdRef.current ?? -75));
+    const usable = beacons.filter((b) => (b.avgRssi ?? b.rssi) >= (rssiThresholdRef.current ?? -88));
     if (usable.length === 0) {
-      setPositionError(`No beacon with sufficient RSSI (threshold ${rssiThresholdRef.current ?? -75} dBm)`);
+      setPositionError(`No beacon with sufficient RSSI (threshold ${rssiThresholdRef.current ?? -88} dBm)`);
       return;
     }
 
@@ -178,7 +178,7 @@ export function useBeaconScanner(): UseBeaconScannerResult {
     }
 
     // store the configured RSSI threshold so the handler uses the same value
-    rssiThresholdRef.current = options?.rssiThreshold ?? -75;
+    rssiThresholdRef.current = options?.rssiThreshold ?? -88;
 
     const success = await beaconScanner.startScanning(
       handleBeaconsFound,

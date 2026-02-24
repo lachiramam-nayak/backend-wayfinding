@@ -23,7 +23,7 @@ export type TrackingConfig = {
 const DEFAULT_CONFIG: TrackingConfig = {
   scanIntervalMs: 500,
   stepLengthM: 0.7,
-  rssiThreshold: -90,
+  rssiThreshold: -88,
   n: 2.5,
   kalmanProcessNoise: 0.01,
   kalmanMeasurementNoise: 2,
@@ -99,6 +99,13 @@ export class IndoorTracker {
   setRoute(route: Array<{ x: number; y: number }>, pixelsPerMeter: number) {
     this.route = route || [];
     this.pixelsPerMeter = pixelsPerMeter || 10;
+  }
+
+  setAnchorPosition(x: number, y: number) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    this.lastPos = { x, y };
+    this.kalmanX.reset(x);
+    this.kalmanY.reset(y);
   }
 
   setBeacons(beacons: Beacon[]) {
@@ -224,6 +231,19 @@ export class IndoorTracker {
     const nx = this.lastPos.x + stepPx * Math.cos(this.headingRad);
     const ny = this.lastPos.y + stepPx * Math.sin(this.headingRad);
     const snapped = this.snapToRoute(nx, ny);
+    const dx = snapped.x - this.lastPos.x;
+    const dy = snapped.y - this.lastPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    // Prevent teleporting if snap jumps far ahead on the route.
+    if (dist > stepPx * 1.5) {
+      const ratio = stepPx / dist;
+      this.updatePosition(
+        this.lastPos.x + dx * ratio,
+        this.lastPos.y + dy * ratio,
+        'sensor'
+      );
+      return;
+    }
     this.updatePosition(snapped.x, snapped.y, 'sensor');
   }
 

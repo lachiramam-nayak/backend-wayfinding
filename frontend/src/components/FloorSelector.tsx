@@ -70,17 +70,17 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: '#1a1a2e',
     borderRadius: 12,
-    padding: 12,
+    padding: 8,
     marginBottom: 12,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   headerText: {
     color: '#888',
-    fontSize: 12,
+    fontSize: 11,
     marginLeft: 6,
     fontWeight: '600',
   },
@@ -91,9 +91,9 @@ const styles = StyleSheet.create({
   floorButton: {
     backgroundColor: '#252542',
     borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    minWidth: 70,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    minWidth: 56,
     alignItems: 'center',
   },
   floorButtonSelected: {
@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
   },
   floorNumber: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '700',
   },
   floorNumberSelected: {
@@ -109,8 +109,8 @@ const styles = StyleSheet.create({
   },
   floorName: {
     color: '#888',
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 10,
+    marginTop: 1,
   },
   floorNameSelected: {
     color: 'rgba(255, 255, 255, 0.8)',

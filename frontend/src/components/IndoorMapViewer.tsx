@@ -1,22 +1,71 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Dimensions,
   Image,
-  Platform,
   Animated,
   PanResponder,
   GestureResponderEvent,
-  TouchableOpacity,
 } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  GestureHandlerRootView,
+  PinchGestureHandler,
+  RotationGestureHandler,
+  State,
+} from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Polyline } from 'react-native-svg';
+import Svg, { Polyline, Polygon } from 'react-native-svg';
 import { POI, UserLocation, Beacon } from '../store/appStore';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const distance = (ax: number, ay: number, bx: number, by: number) => {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return Math.sqrt(dx * dx + dy * dy);
+};
+
+const getRouteHeading = (
+  userLocation: UserLocation | null | undefined,
+  route: Array<{ x: number; y: number; type: string }> | undefined
+) => {
+  if (!userLocation || !route || route.length < 2) return 0;
+
+  let bestIndex = 0;
+  let bestDist = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < route.length - 1; i += 1) {
+    const a = route[i];
+    const b = route[i + 1];
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const apx = userLocation.x - a.x;
+    const apy = userLocation.y - a.y;
+    const abLenSq = abx * abx + aby * aby;
+    const t = abLenSq === 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apy * aby) / abLenSq));
+    const projX = a.x + t * abx;
+    const projY = a.y + t * aby;
+    const d = distance(userLocation.x, userLocation.y, projX, projY);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIndex = i;
+    }
+  }
+
+  const start = route[bestIndex];
+  const end = route[bestIndex + 1];
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return angle + 90;
+};
+
+export interface IndoorMapViewerHandle {
+  rotateBy: (deltaDeg: number) => void;
+  resetView: () => void;
+  zoomBy: (delta: number) => void;
+}
 
 interface IndoorMapViewerProps {
   mapImage?: string;
@@ -29,12 +78,16 @@ interface IndoorMapViewerProps {
   beacons?: Beacon[];
   onPoiPress?: (poi: POI) => void;
   onMapPress?: (x: number, y: number) => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
   showMarkers?: boolean;
   showDestinationMode?: boolean;
   showRoutePoints?: boolean;
+  showRouteLine?: boolean;
+  showTurnPrompt?: boolean;
 }
 
-export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
+export const IndoorMapViewer = forwardRef<IndoorMapViewerHandle, IndoorMapViewerProps>(({
   mapImage,
   mapWidth,
   mapHeight,
@@ -45,14 +98,27 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
   beacons = [],
   onPoiPress,
   onMapPress,
+  onInteractionStart,
+  onInteractionEnd,
   showMarkers = true,
   showDestinationMode = false,
   showRoutePoints = true,
-}) => {
-  const [scale, setScale] = useState(1);
-  const [translateX, setTranslateX] = useState(0);
-  const [translateY, setTranslateY] = useState(0);
-  const [rotation, setRotation] = useState(0);
+  showRouteLine = true,
+  showTurnPrompt = true,
+}, ref) => {
+  const translateXAnim = useRef(new Animated.Value(0)).current;
+  const translateYAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const rotationAnim = useRef(new Animated.Value(0)).current;
+  const lastPanRef = useRef({ x: 0, y: 0 });
+  const panStartRef = useRef({ x: 0, y: 0 });
+  const lastScaleRef = useRef(1);
+  const lastRotationRef = useRef(0);
+  const userXAnim = useRef(new Animated.Value(0)).current;
+  const userYAnim = useRef(new Animated.Value(0)).current;
+  const hasUserAnimInitRef = useRef(false);
+  const pinchRef = useRef(null);
+  const rotationRef = useRef(null);
 
   const MIN_SCALE = 0.5;
   const MAX_SCALE = 4;
@@ -72,14 +138,53 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
     displayWidth = containerHeight * aspectRatio;
   }
 
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+  useEffect(() => {
+    if (!userLocation) return;
+    if (!Number.isFinite(userLocation.x) || !Number.isFinite(userLocation.y)) return;
+    const clampedX = clamp(userLocation.x, 0, mapWidth);
+    const clampedY = clamp(userLocation.y, 0, mapHeight);
+    const coords = toDisplayCoords(clampedX, clampedY);
+    if (!hasUserAnimInitRef.current) {
+      hasUserAnimInitRef.current = true;
+      userXAnim.setValue(coords.x);
+      userYAnim.setValue(coords.y);
+      return;
+    }
+    Animated.parallel([
+      Animated.timing(userXAnim, {
+        toValue: coords.x,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+      Animated.timing(userYAnim, {
+        toValue: coords.y,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [userLocation?.x, userLocation?.y, mapWidth, mapHeight, displayWidth, displayHeight]);
+
   // Simple pan responder for drag
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: (event) => (event.nativeEvent.touches?.length || 0) === 1,
+      onMoveShouldSetPanResponder: (event) => (event.nativeEvent.touches?.length || 0) === 1,
+      onPanResponderGrant: () => {
+        panStartRef.current = { ...lastPanRef.current };
+      },
       onPanResponderMove: (event, { dx, dy }) => {
-        setTranslateX(translateX + dx);
-        setTranslateY(translateY + dy);
+        const nextX = panStartRef.current.x + dx;
+        const nextY = panStartRef.current.y + dy;
+        translateXAnim.setValue(nextX);
+        translateYAnim.setValue(nextY);
+      },
+      onPanResponderRelease: (event, { dx, dy }) => {
+        lastPanRef.current = {
+          x: panStartRef.current.x + dx,
+          y: panStartRef.current.y + dy,
+        };
       },
       onStartShouldSetPanResponderCapture: () => {
         // Allow taps to go through in destination mode
@@ -111,34 +216,80 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
     onMapPress(Math.max(0, Math.min(mapCoords.x, mapWidth)), Math.max(0, Math.min(mapCoords.y, mapHeight)));
   };
 
-  const rotateMap = (delta: number) => {
-    setRotation((prev) => {
-      const next = (prev + delta) % 360;
-      return next < 0 ? next + 360 : next;
-    });
+  const handlePinch = (event: any) => {
+    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, lastScaleRef.current * event.nativeEvent.scale));
+    scaleAnim.setValue(next);
   };
 
-  const zoomBy = (delta: number) => {
-    setScale((prev) => {
-      const next = prev + delta;
-      return Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
-    });
+  const handlePinchStateChange = (event: any) => {
+    if (event.nativeEvent.state === State.END || event.nativeEvent.state === State.CANCELLED) {
+      const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, lastScaleRef.current * event.nativeEvent.scale));
+      lastScaleRef.current = next;
+      scaleAnim.setValue(next);
+    }
   };
+
+  const handleRotation = (event: any) => {
+    const deltaDeg = (event.nativeEvent.rotation * 180) / Math.PI;
+    rotationAnim.setValue(lastRotationRef.current + deltaDeg);
+  };
+
+  const handleRotationStateChange = (event: any) => {
+    if (event.nativeEvent.state === State.END || event.nativeEvent.state === State.CANCELLED) {
+      const deltaDeg = (event.nativeEvent.rotation * 180) / Math.PI;
+      const next = lastRotationRef.current + deltaDeg;
+      lastRotationRef.current = next;
+      rotationAnim.setValue(next);
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    rotateBy: (deltaDeg: number) => {
+      const next = lastRotationRef.current + deltaDeg;
+      lastRotationRef.current = next;
+      rotationAnim.setValue(next);
+    },
+    resetView: () => {
+      lastPanRef.current = { x: 0, y: 0 };
+      panStartRef.current = { x: 0, y: 0 };
+      translateXAnim.setValue(0);
+      translateYAnim.setValue(0);
+      lastScaleRef.current = 1;
+      scaleAnim.setValue(1);
+      lastRotationRef.current = 0;
+      rotationAnim.setValue(0);
+    },
+    zoomBy: (delta: number) => {
+      const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, lastScaleRef.current + delta));
+      lastScaleRef.current = next;
+      scaleAnim.setValue(next);
+    },
+  }), [MAX_SCALE, MIN_SCALE, rotationAnim, scaleAnim, translateXAnim, translateYAnim]);
 
   const renderUserMarker = () => {
     if (!userLocation) return null;
-    const coords = toDisplayCoords(userLocation.x, userLocation.y);
+    const heading = getRouteHeading(userLocation, route);
     return (
-      <View
+      <Animated.View
         style={[
           styles.marker,
           styles.userMarker,
-          { left: coords.x - 12, top: coords.y - 12 },
+          {
+            left: Animated.subtract(userXAnim, 14),
+            top: Animated.subtract(userYAnim, 14),
+            transform: [{ rotate: `${heading}deg` }],
+          },
         ]}
       >
-        <View style={styles.userMarkerInner} />
-        <View style={styles.userMarkerPulse} />
-      </View>
+        <Svg width={28} height={28} viewBox="0 0 28 28">
+          <Polygon
+            points="14,2 26,24 14,20 2,24"
+            fill="#4A90FF"
+            stroke="#ffffff"
+            strokeWidth={1.5}
+          />
+        </Svg>
+      </Animated.View>
     );
   };
 
@@ -195,6 +346,7 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
 
   const renderRoute = () => {
     if (!route || route.length < 2) return null;
+    if (!showRouteLine && !showRoutePoints) return null;
     
     const points = route
       .map((p) => {
@@ -205,15 +357,17 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
 
     return (
       <View style={styles.routeContainer}>
-        <Svg width={displayWidth} height={displayHeight} style={styles.routeSvg}>
-          <Polyline
-            points={points}
-            fill="none"
-            stroke="#0B3D91"
-            strokeWidth={4}
-            strokeOpacity={1}
-          />
-        </Svg>
+        {showRouteLine && (
+          <Svg width={displayWidth} height={displayHeight} style={styles.routeSvg}>
+            <Polyline
+              points={points}
+              fill="none"
+              stroke="#0B3D91"
+              strokeWidth={4}
+              strokeOpacity={1}
+            />
+          </Svg>
+        )}
         {showRoutePoints && route.map((p, i) => {
           const coords = toDisplayCoords(p.x, p.y);
           return (
@@ -240,71 +394,84 @@ export const IndoorMapViewer: React.FC<IndoorMapViewerProps> = ({
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <View
-        style={[
-          styles.mapContainer,
-          {
-            transform: [
-              { translateX },
-              { translateY },
-              { scale },
-              { rotate: `${rotation}deg` },
-            ],
-          },
-        ]}
-        {...panResponder.panHandlers}
-        onTouchEnd={handleMapTap}
+      <RotationGestureHandler
+        ref={rotationRef}
+        simultaneousHandlers={pinchRef}
+        onGestureEvent={handleRotation}
+        onHandlerStateChange={handleRotationStateChange}
       >
-        {mapImage ? (
-          <Image
-            source={{ uri: mapImage }}
-            style={[styles.mapImage, { width: displayWidth, height: displayHeight }]}
-            resizeMode="contain"
-            />
-          ) : (
-            <View style={[styles.placeholderMap, { width: displayWidth, height: displayHeight }]}>
-              <View style={styles.gridOverlay}>
-                {Array.from({ length: 10 }).map((_, i) => (
-                  <View key={`h-${i}`} style={[styles.gridLine, styles.gridLineHorizontal, { top: `${i * 10}%` }]} />
-                ))}
-                {Array.from({ length: 10 }).map((_, i) => (
-                  <View key={`v-${i}`} style={[styles.gridLine, styles.gridLineVertical, { left: `${i * 10}%` }]} />
-                ))}
-              </View>
-            </View>
-          )}
-        {renderRoute()}
-        {renderBeaconMarkers()}
-        {renderPOIMarkers()}
-        {renderDestinationMarker()}
-        {renderUserMarker()}
-        {showDestinationMode && (
-          <View style={styles.destinationModeOverlay}>
-            <Text style={styles.destinationModeText}>Tap to select destination</Text>
+        <PinchGestureHandler
+          ref={pinchRef}
+          simultaneousHandlers={rotationRef}
+          onGestureEvent={handlePinch}
+          onHandlerStateChange={handlePinchStateChange}
+          minPointers={2}
+        >
+          <View
+            style={styles.mapContainer}
+            {...panResponder.panHandlers}
+            onTouchStart={onInteractionStart}
+            onTouchEnd={(event) => {
+              onInteractionEnd?.();
+              handleMapTap(event);
+            }}
+            onTouchCancel={onInteractionEnd}
+          >
+            <Animated.View
+              style={[
+                styles.mapContent,
+                {
+                  width: displayWidth,
+                  height: displayHeight,
+                  transform: [
+                    { translateX: translateXAnim },
+                    { translateY: translateYAnim },
+                    { scale: scaleAnim },
+                    {
+                      rotate: rotationAnim.interpolate({
+                        inputRange: [-360, 360],
+                        outputRange: ['-360deg', '360deg'],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              {mapImage ? (
+                <Image
+                  source={{ uri: mapImage }}
+                  style={[styles.mapImage, { width: displayWidth, height: displayHeight }]}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={[styles.placeholderMap, { width: displayWidth, height: displayHeight }]}>
+                  <View style={styles.gridOverlay}>
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <View key={`h-${i}`} style={[styles.gridLine, styles.gridLineHorizontal, { top: `${i * 10}%` }]} />
+                    ))}
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <View key={`v-${i}`} style={[styles.gridLine, styles.gridLineVertical, { left: `${i * 10}%` }]} />
+                    ))}
+                  </View>
+                </View>
+              )}
+              {renderRoute()}
+              {renderBeaconMarkers()}
+              {renderPOIMarkers()}
+              {renderDestinationMarker()}
+              {renderUserMarker()}
+              {showDestinationMode && (
+                <View style={styles.destinationModeOverlay}>
+                  <Text style={styles.destinationModeText}>Tap to select destination</Text>
+                </View>
+              )}
+            </Animated.View>
           </View>
-        )}
-      </View>
-
-      <View style={styles.controls}>
-        <TouchableOpacity style={styles.controlButton} onPress={() => rotateMap(-90)}>
-          <Text style={styles.controlButtonText}>⟲</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={() => rotateMap(90)}>
-          <Text style={styles.controlButtonText}>⟳</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={() => setRotation(0)}>
-          <Text style={styles.controlButtonText}>Reset</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={() => zoomBy(0.25)}>
-          <Text style={styles.controlButtonText}>+</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={() => zoomBy(-0.25)}>
-          <Text style={styles.controlButtonText}>−</Text>
-        </TouchableOpacity>
-      </View>
+        </PinchGestureHandler>
+      </RotationGestureHandler>
     </GestureHandlerRootView>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -317,6 +484,9 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  mapContent: {
+    position: 'relative',
   },
   mapImage: {
     borderRadius: 8,
@@ -348,25 +518,10 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   userMarker: {
-    width: 24,
-    height: 24,
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  userMarkerInner: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#4A90FF',
-    borderWidth: 3,
-    borderColor: '#ffffff',
-  },
-  userMarkerPulse: {
-    position: 'absolute',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(74, 144, 255, 0.3)',
   },
   destinationMarker: {
     width: 28,
@@ -424,26 +579,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     textAlign: 'center',
-  },
-  controls: {
-    position: 'absolute',
-    right: 12,
-    top: 12,
-    flexDirection: 'row',
-    gap: 8,
-    backgroundColor: 'rgba(26, 26, 46, 0.85)',
-    padding: 6,
-    borderRadius: 10,
-  },
-  controlButton: {
-    backgroundColor: '#252542',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  controlButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
   },
 });

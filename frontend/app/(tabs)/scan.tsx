@@ -44,7 +44,7 @@ export default function ScanScreen() {
     stopScanning: stopBeaconScanning,
   } = useBeaconScanner();
 
-  const [rssiThreshold, setRssiThreshold] = useState<number>(-80);
+  const [rssiThreshold, setRssiThreshold] = useState<number>(-88);
 
   // Update app store and user location when position changes
   useEffect(() => {
@@ -81,7 +81,7 @@ export default function ScanScreen() {
   const handleStartBeaconScanning = async () => {
     const success = await startBeaconScanning({
       batchInterval: 1000,
-      rssiThreshold: -80,
+      rssiThreshold: -88,
       smoothingWindow: 5,
     });
 
@@ -224,7 +224,7 @@ export default function ScanScreen() {
                   onChangeText={(t) => {
                     const n = parseInt(t, 10);
                     if (Number.isNaN(n)) {
-                      setRssiThreshold(-80);
+                      setRssiThreshold(-88);
                     } else {
                       setRssiThreshold(n);
                     }
